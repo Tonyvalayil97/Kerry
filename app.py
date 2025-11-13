@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Streamlit UI – KLN Freight Invoice Extractor (Final Version with Subtotal Fix)
+# Streamlit UI – KLN Freight Invoice Extractor (Final Version)
 
 import io
 import os
@@ -32,9 +32,8 @@ HEADERS = [
     "Pieces", "Subtotal", "Freight_Mode", "Freight_Rate"
 ]
 
-
 # --------------------------------------------------------------
-# REGEX for KLN Freight Invoice Extraction
+# REGEX — KLN Freight Invoice Extraction
 # --------------------------------------------------------------
 
 # Invoice date
@@ -56,24 +55,24 @@ PACKAGES_PAT = re.compile(r"(\d+)\s+PACKAGE\b", re.I)
 WEIGHT_PAT = re.compile(r"Gross Weight[:\s]+([\d.]+)\s*KG", re.I)
 VOL_PAT = re.compile(r"Volume Weight[:\s]+([\d.]+)\s*KG", re.I)
 
-# FIXED SUBTOTAL REGEX (works for all formats)
+# Subtotal (Total charges)
 SUBTOTAL_PAT = re.compile(
     r"Total\s*[:\-]?\s*([\d,]+\.\d{2})\s*(USD|CAD|EUR)?",
     re.I
 )
 
+# Freight amount (Final amount for AIR FREIGHT line)
+FREIGHT_AMOUNT_PAT = re.compile(
+    r"AIR FREIGHT[^\n]*?([\d,]+\.\d{2})\s*$",
+    re.I | re.M
+)
+
 # Currency
 CURRENCY_PAT = re.compile(r"\b(USD|CAD|EUR)\b", re.I)
 
-# Freight rate
-FREIGHT_RATE_PAT = re.compile(
-    r"AIR FREIGHT.*?USD\s*([\d.,]+)",
-    re.I
-)
-
 
 # --------------------------------------------------------------
-# PDF PARSER
+# PDF PARSER (FINAL)
 # --------------------------------------------------------------
 def parse_invoice_pdf_bytes(data: bytes, filename: str) -> Optional[Dict[str, Any]]:
     try:
@@ -98,26 +97,26 @@ def parse_invoice_pdf_bytes(data: bytes, filename: str) -> Optional[Dict[str, An
         if m:
             shipper = m.group(1).strip()
 
-        # -------- Pieces (packages) --------
+        # -------- Packages --------
         pieces = None
         m = PACKAGES_PAT.search(text)
         if m:
             pieces = int(m.group(1))
 
-        # -------- Weight (KG) --------
+        # -------- Weight KG --------
         weight = None
         m = WEIGHT_PAT.search(text)
         if m:
             weight = float(m.group(1))
 
-        # -------- Volume Weight (KG → m³) --------
+        # -------- Volume KG → m³ --------
         volume_m3 = None
         m = VOL_PAT.search(text)
         if m:
             vol_kg = float(m.group(1))
-            volume_m3 = vol_kg / 167.0  # industry conversion
+            volume_m3 = vol_kg / 167.0  # industry volume conversion
 
-        # -------- Chargeable Weight --------
+        # -------- Chargeable KG --------
         chargeable_kg = None
         if weight and volume_m3:
             chargeable_kg = max(weight, volume_m3 * 167)
@@ -125,21 +124,21 @@ def parse_invoice_pdf_bytes(data: bytes, filename: str) -> Optional[Dict[str, An
         # -------- Chargeable CBM --------
         chargeable_cbm = volume_m3
 
-        # -------- Freight Rate --------
+        # -------- Freight Amount (NOT unit price) --------
         f_mode = None
         f_rate = None
-        m = FREIGHT_RATE_PAT.search(text)
+        m = FREIGHT_AMOUNT_PAT.search(text)
         if m:
             f_mode = "Air"
             f_rate = float(m.group(1).replace(",", ""))
 
-        # -------- Subtotal (Total Charges) --------
+        # -------- Subtotal --------
         subtotal = None
         m = SUBTOTAL_PAT.search(text)
         if m:
             subtotal = float(m.group(1).replace(",", ""))
 
-        # -------- Return formatted row --------
+        # -------- Build row dictionary --------
         return {
             "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "Filename": filename,
@@ -206,7 +205,7 @@ if extract_btn and uploads:
     if rows:
         df = pd.DataFrame(rows)
 
-        # Ensure all columns are present
+        # Ensure all columns appear
         for col in HEADERS:
             if col not in df.columns:
                 df[col] = None
@@ -216,7 +215,7 @@ if extract_btn and uploads:
         st.subheader("Preview")
         st.dataframe(df, use_container_width=True)
 
-        # Build Excel output
+        # Create Excel
         output = io.BytesIO()
         wb = Workbook()
         ws = wb.active

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Streamlit UI – KLN Freight Invoice Extractor (Final Version)
+# Streamlit UI – KLN Freight Invoice Extractor (Final Version with Subtotal Fix)
 
 import io
 import os
@@ -14,7 +14,7 @@ import streamlit as st
 from openpyxl import Workbook
 
 # --------------------------------------------------------------
-# Extract invoice number like DN26693 or DN26693A
+# Extract invoice ID like DN26693 or DN26693A
 # --------------------------------------------------------------
 def extract_invoice_id(filename: str):
     m = re.search(r"(DN\s*\d+[A-Z]?)", filename.upper())
@@ -34,34 +34,46 @@ HEADERS = [
 
 
 # --------------------------------------------------------------
-# REGEX for KLN Freight Invoice Format
+# REGEX for KLN Freight Invoice Extraction
 # --------------------------------------------------------------
+
+# Invoice date
 INVOICE_DATE_PAT = re.compile(
-    r"INVOICE DATE[\s:\-A-Z\n]*?(\d{4}-\d{2}-\d{2})", re.I
+    r"INVOICE DATE[\s:\-A-Z\n]*?(\d{4}-\d{2}-\d{2})",
+    re.I
 )
 
+# Shipper name
 SHIPPER_PAT = re.compile(
-    r"SHIPPER'S NAME\s*-\s*NOM DE L'EXP[ÉE]DITEUR\s*([\w\s\-\.,/&]+)", re.I
+    r"SHIPPER'S NAME\s*-\s*NOM DE L'EXP[ÉE]DITEUR\s*([\w\s\-\.,/&]+)",
+    re.I
 )
 
+# Packages
 PACKAGES_PAT = re.compile(r"(\d+)\s+PACKAGE\b", re.I)
 
+# Weight & volume
 WEIGHT_PAT = re.compile(r"Gross Weight[:\s]+([\d.]+)\s*KG", re.I)
 VOL_PAT = re.compile(r"Volume Weight[:\s]+([\d.]+)\s*KG", re.I)
 
+# FIXED SUBTOTAL REGEX (works for all formats)
 SUBTOTAL_PAT = re.compile(
-    r"([\d.,]+)\s*USD\s*Total", re.I
+    r"Total\s*[:\-]?\s*([\d,]+\.\d{2})\s*(USD|CAD|EUR)?",
+    re.I
 )
 
+# Currency
 CURRENCY_PAT = re.compile(r"\b(USD|CAD|EUR)\b", re.I)
 
+# Freight rate
 FREIGHT_RATE_PAT = re.compile(
-    r"AIR FREIGHT.*?USD\s*([\d.,]+)", re.I
+    r"AIR FREIGHT.*?USD\s*([\d.,]+)",
+    re.I
 )
 
 
 # --------------------------------------------------------------
-# PDF PARSER (final)
+# PDF PARSER
 # --------------------------------------------------------------
 def parse_invoice_pdf_bytes(data: bytes, filename: str) -> Optional[Dict[str, Any]]:
     try:
@@ -86,26 +98,26 @@ def parse_invoice_pdf_bytes(data: bytes, filename: str) -> Optional[Dict[str, An
         if m:
             shipper = m.group(1).strip()
 
-        # -------- Pieces --------
+        # -------- Pieces (packages) --------
         pieces = None
         m = PACKAGES_PAT.search(text)
         if m:
             pieces = int(m.group(1))
 
-        # -------- Weight KG --------
+        # -------- Weight (KG) --------
         weight = None
         m = WEIGHT_PAT.search(text)
         if m:
             weight = float(m.group(1))
 
-        # -------- Volume Weight (KG) → m³ --------
+        # -------- Volume Weight (KG → m³) --------
         volume_m3 = None
         m = VOL_PAT.search(text)
         if m:
             vol_kg = float(m.group(1))
             volume_m3 = vol_kg / 167.0  # industry conversion
 
-        # -------- Chargeable KG --------
+        # -------- Chargeable Weight --------
         chargeable_kg = None
         if weight and volume_m3:
             chargeable_kg = max(weight, volume_m3 * 167)
@@ -121,13 +133,13 @@ def parse_invoice_pdf_bytes(data: bytes, filename: str) -> Optional[Dict[str, An
             f_mode = "Air"
             f_rate = float(m.group(1).replace(",", ""))
 
-        # -------- Subtotal --------
+        # -------- Subtotal (Total Charges) --------
         subtotal = None
         m = SUBTOTAL_PAT.search(text)
         if m:
             subtotal = float(m.group(1).replace(",", ""))
 
-        # -------- Return row --------
+        # -------- Return formatted row --------
         return {
             "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "Filename": filename,
@@ -159,7 +171,7 @@ st.set_page_config(
 )
 
 st.title("📄 KLN Freight Invoice → Excel Extractor")
-st.caption("Upload KLN invoices → Extract → Download Excel")
+st.caption("Upload KLN invoices (PDF) → Extract → Download Excel")
 
 uploads = st.file_uploader(
     "Upload KLN PDF files",
@@ -194,7 +206,7 @@ if extract_btn and uploads:
     if rows:
         df = pd.DataFrame(rows)
 
-        # Ensure all columns exist
+        # Ensure all columns are present
         for col in HEADERS:
             if col not in df.columns:
                 df[col] = None
@@ -204,7 +216,7 @@ if extract_btn and uploads:
         st.subheader("Preview")
         st.dataframe(df, use_container_width=True)
 
-        # Build Excel
+        # Build Excel output
         output = io.BytesIO()
         wb = Workbook()
         ws = wb.active
@@ -216,7 +228,7 @@ if extract_btn and uploads:
         wb.save(output)
         output.seek(0)
 
-        st.success(f"Extraction complete: {len(rows)} invoices.")
+        st.success(f"✔ Extraction complete ({len(rows)} invoices).")
 
         st.download_button(
             "⬇️ Download Invoice_Summary.xlsx",
@@ -224,3 +236,4 @@ if extract_btn and uploads:
             file_name="Invoice_Summary.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
+
